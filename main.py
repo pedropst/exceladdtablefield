@@ -1,11 +1,109 @@
-from msilib.schema import Class
+from copy import copy
+from pathlib import Path
+from tkinter import ttk
+from tkinter import *
+from openpyxl.styles import Alignment
+from openpyxl.styles import Font
 import openpyxl
 import os
-from pathlib import Path
-import tkinter
+import threading
+import sys
 
-BASE_DIR = Path(__file__).resolve().parent
+def defining_software_path():
+    if getattr(sys, 'frozen', False):
+        BASE_DIR = os.path.dirname(sys.executable)
+    elif __file__:
+        BASE_DIR = Path(__file__).resolve().parent
+    return BASE_DIR
 
+BASE_DIR = defining_software_path()
+
+def change_cell_type(cell, header):
+    if cell.value != None:
+        if header == 'Date':
+            cell.number_format = 'DD/MM/YYYY'
+
+def auto_size(sheet, cell):
+    if (cell.value != None) and (len(cell.value) > sheet.column_dimensions[cell.column_letter].width):
+        sheet.column_dimensions[cell.column_letter].width = len(cell.value)
+
+def save_new_file(sheet, path):
+    header_cells = []
+    header = []
+    for column in sheet.iter_cols(min_col=0, max_col=len(sheet.column_dimensions), min_row=1, max_row=1):
+        for cell in column:
+            if cell.value != None:
+                header_cells.append(cell)
+
+    for hcell in header_cells:
+        column_values = []
+        for rows in sheet.iter_cols(min_col=hcell.column, max_col=hcell.column, min_row=1, max_row=sheet.max_row):
+            for c in rows:
+                column_values.append(c)
+        header.append(column_values)
+
+    book = openpyxl.Workbook()
+    ws = book.active
+    ws.title = "Report"
+    last_row = ws.max_row - 1
+    for l in header:
+        if last_row != 0:
+            for c in range(1, len(l)):
+                ws.cell(last_row + l[c].row, header.index(l) + 1, l[c].value)
+        else:
+            for c in range(0, len(l)):
+                if c == 0:
+                    new_cell = ws.cell(last_row + l[c].row, header.index(l) + 1, l[c].value)
+                    new_cell.font = Font(bold=True, size=13)
+                    new_cell.alignment = Alignment(horizontal='center')
+                else:
+                    new_cell = ws.cell(last_row + l[c].row, header.index(l) + 1, l[c].value)
+                    auto_size(ws, new_cell)
+                    change_cell_type(new_cell, ws.cell(1, new_cell.column).value)
+    book.save(path)
+
+def add_data_to_master_file(sheet, path):
+    header_cells = []
+    header = []
+    for column in sheet.iter_cols(min_col=0, max_col=len(sheet.column_dimensions), min_row=1, max_row=1):
+        for cell in column:
+            if cell.value != None:
+                header_cells.append(cell)
+
+    for hcell in header_cells:
+        column_values = []
+        for rows in sheet.iter_cols(min_col=hcell.column, max_col=hcell.column, min_row=1, max_row=sheet.max_row):
+            for c in rows:
+                column_values.append(c)
+        header.append(column_values)
+
+    if path != '':
+        book = openpyxl.load_workbook(path)
+        ws = book.active
+        last_row = ws.max_row - 1
+        for l in header:
+            if last_row != 0:
+                for c in range(1, len(l)):
+                    ws.cell(last_row + l[c].row, header.index(l) + 1, l[c].value)
+            else:
+                for c in range(0, len(l)):
+                    if c == 0:
+                        new_cell = ws.cell(last_row + l[c].row, header.index(l) + 1, l[c].value)
+                        new_cell.font = Font(bold=True, size=13)
+                        new_cell.alignment = Alignment(horizontal='center')
+                    else:
+                        new_cell = ws.cell(last_row + l[c].row, header.index(l) + 1, l[c].value)
+                        auto_size(ws, new_cell)
+                        change_cell_type(new_cell, ws.cell(1, new_cell.column).value)
+        book.save(path)
+    else:
+        book = openpyxl.Workbook()
+        ws = book.active
+        ws.title = "Master File"
+        software_path = defining_software_path()
+        book.save(os.path.join(software_path, 'master_file.xlsx'))
+        add_data_to_master_file(sheet, os.path.join(software_path, 'master_file.xlsx'))
+    
 def get_category_dictionary(path):
     cat_dic = {}
     if os.path.exists(os.path.join(path, 'category_dictionary.xlsx')):
@@ -22,10 +120,17 @@ def get_category_dictionary(path):
         book = openpyxl.Workbook()
         sheet = book.active
         sheet.title = "Category Dictionary"
-        sheet.cell(1, 1, 'MERCHANT')
-        sheet.cell(1, 2, 'CATEGORY')
+        new_cell = sheet.cell(1, 1, 'MERCHANT')
+        new_cell.font = Font(bold=True, size=13)
+        new_cell.alignment = Alignment(horizontal='center')
+
+        new_cell = sheet.cell(1, 2, 'CATEGORY')
+        new_cell.font = Font(bold=True, size=13)
+        new_cell.alignment = Alignment(horizontal='center')
+        
+        software_path = defining_software_path()
         book.save(os.path.join(path, 'category_dictionary.xlsx'))
-        get_category_dictionary(path, cat_dic)
+        get_category_dictionary(path)
 
 def add_to_category_dictionary(path, list_to_add):
     category_book = openpyxl.load_workbook(os.path.join(path, 'category_dictionary.xlsx'))
@@ -37,121 +142,124 @@ def add_to_category_dictionary(path, list_to_add):
 
     category_book.save(os.path.join(path, 'category_dictionary.xlsx'))
 
-class Categories:
-    def __init__(self):
-        self.input_button = None
-        self.choosed = ''
-        self.run()
+def handle_merged_cells_shifting_and_add_new_columns(sheet, target_column_number):
+    select_merged_cells = []
+    for merged_cell in sheet.merged_cells.ranges:
+        if merged_cell.min_col >= target_column_number:
+            select_merged_cells.append(merged_cell)
 
+    for mc in select_merged_cells:
+        mc.shift(2,0)
+
+    sheet.insert_cols(target_column_number, 2)
+
+def changing_column_width(sheet):
+    for col in sheet.column_dimensions:
+        sheet.column_dimensions[col].width = 14.28
+
+
+class Categories(threading.Thread):
+    def __init__(self):
+        threading.Thread.__init__(self)
+        self.input_button = None
+        self.choosed = None
+        self.path_report = None
+        self.path_master = None
+        self.software_path = defining_software_path()
+        self.main_window = None
+
+    def callback(self):
+        pass
+
+    def call(self, path_report, path_master, root):
+        self.path_report = path_report
+        self.path_master = path_master
+        self.main_window = root
+        self.start()
 
     def run(self):
-        path = 'samplefile.xlsx'
-        books = openpyxl.load_workbook(path)
-        target_column = None
-        category_column = None
-        merchant_column = None
+        books = openpyxl.load_workbook(self.path_report)
+        target_column_cell = None
+        category_column_number = None
+        merchant_column_number = None
+        sheet = None
 
         merchant_content = {}
 
-        for book in books:
-            # if book.namespace == 'Report':
-            for c in book.iter_cols(min_col=0, max_col=len(book.column_dimensions), min_row=1, max_row=1):
-                for cell in c:
-                    if str(cell.value) == 'Description':
-                        target_column = cell
-                        for r in book.iter_rows(min_row=2, max_row=book.max_row, min_col=cell.column, max_col=cell.column):
-                            for cell1 in r:
-                                content = cell1.value
-                                if content != None:
-                                    if content.__contains__(',USD '):
-                                        merchant_content[cell1] = content.split(',USD ')[1][:-3]
-                                    elif content.__contains__(',AED '):
-                                        merchant_content[cell1] = content.split(',AED ')[1][:-3]
-                                else:
-                                    break
+        for sheet in books:
+            if sheet.title == 'Report':
+                for column in sheet.iter_cols(min_col=0, max_col=len(sheet.column_dimensions), min_row=1, max_row=1):
+                    for cell in column:
+                        if str(cell.value) == 'Description':
+                            target_column_cell = cell
+                for rows in sheet.iter_rows(min_row=2, max_row=sheet.max_row, min_col=target_column_cell.column, max_col=target_column_cell.column):
+                    for cell in rows:
+                        content = cell.value
+                        if content != None:
+                            if content.__contains__(',USD '):
+                                merchant_content[cell] = content.split(',USD ')[1][:-3]
+                            elif content.__contains__(',AED '):
+                                merchant_content[cell] = content.split(',AED ')[1][:-3]
+                            else:
+                                merchant_content[cell] = content
+                        else:
+                            break
+                                
+                handle_merged_cells_shifting_and_add_new_columns(sheet, target_column_cell.column)
 
-            i = cell.coordinate
-            f = book.dimensions.split(':')[1]
+                changing_column_width(sheet)
 
-            select_merged_cells = []
-            for merged_cell in book.merged_cells.ranges:
-                if merged_cell.min_col >= target_column.column:
-                    select_merged_cells.append(merged_cell)
+                category_column_number = target_column_cell.column - 2
+                merchant_column_number = target_column_cell.column - 1
 
-            for mc in select_merged_cells:
-                mc.shift(2,0)
+                sheet.cell(1, category_column_number, 'Category')
+                sheet.cell(1, merchant_column_number, 'Merchant')
 
-            book.insert_cols(target_column.column, 2)
+                def call(entry, button, label):
+                    self.choosed = entry.get()
+                    button.destroy()
+                    label.destroy()
+                    entry.destroy()
 
-            for col in book.column_dimensions:
-                book.column_dimensions[col].width = 14.28
+                    self.input_button = None
 
-            category_column = target_column.column - 2
-            book.cell(1, category_column, 'Category')
+                new_data = {}
+                old_data = {}
+                
+                for k in merchant_content.keys():
+                    old_data = get_category_dictionary(BASE_DIR)
+                    if old_data == None:
+                        old_data = {}
+                    sheet.cell(k.row, merchant_column_number, merchant_content[k])
+                    if not old_data.keys().__contains__(merchant_content[k]):
+                        self.input_button = Tk()
+                        self.input_button.geometry('300x150' + "+" + str(self.main_window.winfo_x()) + "+" + str(self.main_window.winfo_y()))
+                        self.input_button.title('Add/assign category')
+                        l = Label(self.main_window, text=merchant_content[k])
+                        l.grid(row=3, column=2, padx=10, pady=10, sticky='W')
+                        e = ttk.Combobox(self.main_window, width=20)
+                        e['values'] = list(set(old_data.values()))
+                        e.grid(row=3, column=1, padx=10, pady=10, sticky='W')
+                        b = Button(self.main_window, text='OK', command=lambda: call(e, b, l))
+                        b.grid(row=3, column=0, padx=10, pady=10, sticky='W')
 
+                        while self.input_button != None:
+                            continue
+                        
+                        new_data[merchant_content[k]] = self.choosed
+                        sheet.cell(k.row, category_column_number, self.choosed)
 
-            merchant_column = target_column.column - 1
-            book.cell(1, merchant_column, 'Merchant')
+                        self.choosed = ''
+                    else:
+                        sheet.cell(k.row, category_column_number, old_data[merchant_content[k]])
 
-            # book.column_dimensions[category_column].bestFit = True
-            # book.column_dimensions[merchant_column].bestFit = True
+                    add_to_category_dictionary(BASE_DIR, new_data)
+                    new_data.clear()              
 
-            for row in book.iter_rows(min_row=2, max_row=book.max_row, min_col=category_column, max_col=category_column):
-                for cell in row:
-                    cell.value = "teste"
+                add_data_to_master_file(sheet, self.path_master)
 
-            category_dictionary = {'MERCHANT' : 'CATEGORY'}
-            old_data = {}
+        report_filename = self.path_report.split('/')[-1]
+        report_directory = self.path_report.replace(report_filename, '')
 
-            def call(entry):
-                self.choosed = entry.get()
-                self.input_button.destroy()
-                self.input_button = None
+        save_new_file(sheet, os.path.join(report_directory, report_filename.split('.xlsx')[0] + '_with_categories.xlsx'))
 
-            new_data = {}
-            for k in merchant_content.keys():
-                old_data = get_category_dictionary(BASE_DIR)
-                book.cell(k.row, merchant_column, merchant_content[k])
-                if not old_data.keys().__contains__(merchant_content[k]):
-                    # OPEN A SIMPLE INPUT FIELD
-                    self.input_button = tkinter.Tk()
-                    self.input_button.geometry('500x200')
-                    self.input_button.title('Add new category or assign')
-                    l = tkinter.Label(self.input_button, text=merchant_content[k])
-                    l.pack()
-                    e = tkinter.Entry(self.input_button, width=20)
-                    e.pack()
-                    b = tkinter.Button(self.input_button, text='OK', command=lambda: call(e))
-                    b.pack()
-                    self.input_button.mainloop()
-
-                    while self.input_button != None:
-                        continue
-                    
-                    new_data[merchant_content[k]] = self.choosed
-                    self.choosed = ''
-                else:
-                    new_data[merchant_content[k]] = old_data[merchant_content[k]]
-            
-            add_to_category_dictionary(BASE_DIR, new_data)
-
-
-            print('ffasdas')
-
-                    
-            # book.move_range(f"{target_column.coordinate}:{book.dimensions.split(':')[1]}", rows=0, cols=20, translate=True)
-
-            # book.insert_cols(target_column)
-            # category_column = target_column
-            # book.cell(1, category_column, 'Category')
-
-            # book.insert_cols(target_column - 1)
-            # merchant_column = target_column - 1
-            # book.cell(1, merchant_column, 'Merchant')
-            
-            # target_column += 1
-
-        books.save('result.xlsx')
-
-
-c = Categories()
